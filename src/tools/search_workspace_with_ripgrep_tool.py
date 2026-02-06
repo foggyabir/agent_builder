@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Type, List, Tuple
 from pydantic import BaseModel, Field
-from utils import is_path_safe
+from .directory_validator import is_path_safe
 from .base import ToolBase
 
 
