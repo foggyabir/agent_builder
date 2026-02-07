@@ -1,5 +1,6 @@
-import asyncio
+import asyncio, json
 from pathlib import Path
+from typing import Union
 from langgraph.graph.state import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from langchain.messages import SystemMessage, HumanMessage, ToolMessage, AnyMessage
@@ -38,7 +39,6 @@ class GraphDependencyResolver:
         )
 
         response = await llm.ainvoke([sys_prompt, human_prompt] + state["messages"])
-        print(response)
         if response.tool_calls:
             return {"messages": [response]}
 
@@ -89,3 +89,39 @@ class GraphDependencyResolver:
         builder.add_edge("tool_node", "llm")
 
         return builder.compile()
+    
+
+class DependencyResolverWrapper:
+    def __init__(self, source: str, prompt_registry: PromptRegistry, max_concurrency=5) -> None:
+        self.source = source
+        self.prompt_registry = prompt_registry
+        self.max_concurrency = max_concurrency
+
+    async def _ainvoke_single(self, file_path:str, semaphore: asyncio.Semaphore)->Union[FileDependency,None]:
+        graph = GraphDependencyResolver(self.source, self.prompt_registry).build()
+        try:
+            async with semaphore:
+                result = await graph.ainvoke({"target_file":file_path})
+                dep = result.get('dependencies')
+                if isinstance(dep, str):
+                    print(dep)
+                    json_str = json.loads(dep)
+                    response = FileDependency.model_validate(json_str)
+                    return response
+                elif isinstance(dep, FileDependency):
+                    return dep
+                else:
+                    return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
+        
+    async def ainvoke(self, files:list[str])->list[Union[FileDependency,None]]:
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+        tasks = [
+            self._ainvoke_single(file, semaphore)
+            for file in files
+        ]
+        deps = await asyncio.gather(*tasks)
+        return deps
+
